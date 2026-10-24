@@ -6216,6 +6216,68 @@
       };
 
       /* ==========================================================================
+         Number words: speech recognition returns digits ("40"), the text spells them ("أربعين")
+         ========================================================================== */
+      const NumberWords = {
+        units: { 'واحد':1,'واحده':1,'احد':1,'احدي':1,'اثنان':2,'اثنين':2,'اثنتان':2,'اثنتين':2,'اثنا':2,'اثني':2,'اثنتا':2,'اثنتي':2,
+          'ثلاث':3,'ثلاثه':3,'اربع':4,'اربعه':4,'خمس':5,'خمسه':5,'ست':6,'سته':6,'سبع':7,'سبعه':7,
+          'ثمان':8,'ثماني':8,'ثمانيه':8,'تسع':9,'تسعه':9,'عشر':10,'عشره':10 },
+        tens: { 'عشرون':20,'عشرين':20,'ثلاثون':30,'ثلاثين':30,'اربعون':40,'اربعين':40,'خمسون':50,'خمسين':50,
+          'ستون':60,'ستين':60,'سبعون':70,'سبعين':70,'ثمانون':80,'ثمانين':80,'تسعون':90,'تسعين':90 },
+        hundredWords: ['ماءه','مءه','مائه','مئه','ميه','مايه'],
+        twoHundredWords: ['ماءتان','مءتان','ماءتين','مءتين','ماءتي','مءتي','مائتان','مائتين','مئتان','مئتين','مائتي','مئتي'],
+        thousands: { 'الف':1000,'الفا':1000,'الفان':2000,'الفين':2000 },
+        isDigits(w) { return /^[0-9\u0660-\u0669]+$/.test(w || ''); },
+        toInt(w) {
+          const m = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669';
+          return parseInt(w.replace(/[\u0660-\u0669]/g, c => m.indexOf(c)), 10);
+        },
+        wordValue(raw) {
+          let w = (raw || '').replace(/^و/, '').replace(/^ال/, '');
+          if (!w) return 0;
+          const direct = this._lookup(w);
+          if (direct !== null) return direct;
+          // accusative alif suffix (خمسا، ثلاثين...): retry without it
+          if (w.length > 3 && w.endsWith('ا')) return this._lookup(w.slice(0, -1));
+          return null;
+        },
+        _lookup(w) {
+          if (this.units[w] !== undefined) return this.units[w];
+          if (this.tens[w] !== undefined) return this.tens[w];
+          if (this.thousands[w] !== undefined) return this.thousands[w];
+          if (this.hundredWords.includes(w)) return 100;
+          if (this.twoHundredWords.includes(w)) return 200;
+          for (const h of this.hundredWords) {
+            if (w.endsWith(h)) {
+              const base = this.units[w.slice(0, -h.length)];
+              if (base >= 3 && base <= 9) return base * 100;
+            }
+          }
+          return null;
+        },
+        parse(words) {
+          let total = 0;
+          for (const w of words) {
+            const v = this.wordValue(w);
+            if (v === null) return null;
+            total += v;
+          }
+          return total;
+        },
+        // How many consecutive expected tokens (from startIdx) spell this number? 0 if none.
+        spanLength(digitWord, tokens, startIdx) {
+          const value = this.toInt(digitWord);
+          if (!isFinite(value)) return 0;
+          const words = [];
+          for (let n = 1; n <= 6 && startIdx + n - 1 < tokens.length; n++) {
+            words.push(tokens[startIdx + n - 1].norm);
+            if (this.parse(words) === value) return n;
+          }
+          return 0;
+        }
+      };
+
+      /* ==========================================================================
          2. Fuzzy String Matcher (Enhanced Speech Lenience & Acoustic Tolerance)
          ========================================================================== */
       const FuzzyMatcher = {
@@ -6912,6 +6974,25 @@
             const expectedToken = AppState.tokens[AppState.currentIndex];
             const targetNorm = expectedToken.norm;
             const nextToken = (AppState.currentIndex + 1 < AppState.tokens.length) ? AppState.tokens[AppState.currentIndex + 1] : null;
+
+            // 0. Spoken digits (e.g. "40") vs. a number written in words in the text (e.g. "أربعين")
+            if (NumberWords.isDigits(spokenWord)) {
+              const nSpan = NumberWords.spanLength(spokenWord, AppState.tokens, AppState.currentIndex);
+              if (nSpan > 0) {
+                for (let k = 0; k < nSpan; k++) this.markWord(AppState.currentIndex + k, 'word-correct');
+                AppState.correctCount += nSpan;
+                AppState.currentIndex += nSpan;
+                matchedCount++;
+                AppState.consecutiveMistakes = 0;
+                AppState.unmatchedAtCurrentCount = 0;
+                this.clearMistakeStop();
+                this.clearOffTrackTimer();
+                this.updateCurrentWordCursor();
+                if (AppState.settings.autoScroll) this.scrollToCurrentWord();
+                this.onProgressUpdate();
+                continue;
+              }
+            }
 
             // 1. Direct or Phonetic Match with Current Expected Word
             if (FuzzyMatcher.isMatch(spokenWord, targetNorm, AppState.settings.tolerance)) {
@@ -8226,6 +8307,25 @@
             const expectedToken = this.tokens[this.currentIndex];
             const targetNorm = expectedToken.norm;
             const nextToken = (this.currentIndex + 1 < this.tokens.length) ? this.tokens[this.currentIndex + 1] : null;
+
+            // 0. Spoken digits vs. number written in words
+            if (NumberWords.isDigits(spokenWord)) {
+              const nSpan = NumberWords.spanLength(spokenWord, this.tokens, this.currentIndex);
+              if (nSpan > 0) {
+                for (let k = 0; k < nSpan; k++) this.markQuizWord(this.currentIndex + k, 'word-correct');
+                this.correctCount += nSpan;
+                this.currentIndex += nSpan;
+                matchedCount++;
+                this.updateQuizWordCursor();
+                this.updateLiveStats();
+                this.scrollToCurrentQuizWord();
+                if (this.currentIndex >= this.tokens.length) {
+                  this.finishQuiz();
+                  return;
+                }
+                continue;
+              }
+            }
 
             // 1. Direct or Fuzzy Match
             if (FuzzyMatcher.isMatch(spokenWord, targetNorm, tolerance)) {
