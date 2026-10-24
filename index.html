@@ -5979,6 +5979,16 @@
             <input type="checkbox" id="chkSkipNarrationFormulas" checked="" style="width: 22px; height: 22px; accent-color: var(--gold-primary); margin-right: 0.75rem; cursor: pointer;">
           </div>
 
+          <div style="display: flex; align-items: flex-start; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid var(--border-subtle); margin: 0 0 0.75rem 0;">
+            <div>
+              <span style="display:block; font-size: 0.9rem; font-weight: 700; color: var(--gold-light);">إظهار الكلمات الخاطئة أثناء التسميع</span>
+              <span style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; display: block; margin-top: 0.2rem;">
+                الوضع الافتراضي: مغلق. طالما تكمل التسميع صحيحاً فلن تُعلَّم أي كلمة بالأحمر، لأن التعرف الصوتي قد يخطئ في السماع. فعّله إن أردت رؤية الكلمات التي لم تُطابق.
+              </span>
+            </div>
+            <input type="checkbox" id="chkShowMistakes" style="width: 22px; height: 22px; accent-color: var(--gold-primary); margin-right: 0.75rem; cursor: pointer;">
+          </div>
+
           <div>
             <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.4rem;">حساسية المطابقة اللفظية (Fuzzy Matching)</label>
             <select id="selectTolerance" style="width: 100%; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-strong);">
@@ -6412,7 +6422,8 @@
           theme: 'dark',
           maxConsecutiveMistakes: 30,
           offTrackTimeoutSeconds: 30,
-          skipNarrationFormulas: true
+          skipNarrationFormulas: true,
+          showMistakes: false
         }
       };
 
@@ -6640,7 +6651,7 @@
             s.getTracks().forEach(tr => tr.stop());
             this.micOk = true; return true;
           } catch (e) {
-            const pp = (document.permissionsPolicy && document.permissionsPolicy.allowsFeature) ? String(document.permissionsPolicy.allowsFeature('microphone')) : 'n/a'; UIManager.showToast('تعذر تشغيل الميكروفون {policy:' + pp + '} [' + ((e && e.name) || 'unknown') + ']: ' + ((e && e.message) || '') + ' — فعّله من إعدادات المتصفح، وإن لم يظهر الطلب فالصفحة قد تكون محجوبة من الميكروفون داخل إطار العرض.');
+            UIManager.showToast('تعذّر تشغيل الميكروفون. تأكد من السماح للموقع باستخدامه من إعدادات المتصفح (أيقونة القفل بجوار الرابط) ثم أعد المحاولة.');
             return false;
           }
         },
@@ -7027,59 +7038,29 @@
             //   giving them the chance to self-correct within the 30-second internal window.
             // =========================================================================
 
-            // Lookahead A: User mispronounced/substituted current token, but continued to nextToken within SAME hadith!
+            // ONE-WORD LOOKAHEAD ONLY: the cursor may move at most one word beyond what was recognised.
+            // Skipping two or more words (or a whole line) never moves the cursor: it waits for the reciter to return.
             const nextSpokenWord = (matchedCount + 1 < words.length) ? words[matchedCount + 1] : null;
+            const nextNextToken = (AppState.currentIndex + 2 < AppState.tokens.length) ? AppState.tokens[AppState.currentIndex + 2] : null;
+
+            // A: current word not recognised / substituted, but the NEXT spoken word matches the NEXT expected word
             if (nextSpokenWord && nextToken && isSameUnit(nextToken) && FuzzyMatcher.isMatch(nextSpokenWord, nextToken.norm, AppState.settings.tolerance)) {
-              this.markWord(AppState.currentIndex, 'word-mistake', spokenWord);
-              AppState.mistakeCount++;
-              AppState.consecutiveMistakes++;
-              AppState.unmatchedAtCurrentCount = 0;
-              this.recordMistake(expectedToken.text, spokenWord, AppState.currentIndex);
+              this.flagMistake(AppState.currentIndex, spokenWord);
               AppState.currentIndex++;
               matchedCount++;
-
-              // Continued reciting text: clear off-track timer and continue smoothly
               this.clearMistakeStop();
               this.clearOffTrackTimer();
               this.updateCurrentWordCursor();
               if (AppState.settings.autoScroll) this.scrollToCurrentWord();
               this.onProgressUpdate();
-              continue; // Next iteration will match nextSpokenWord with nextToken as green!
+              continue;
             }
 
-            // Lookahead B: User skipped current token completely and spoke nextToken within SAME hadith!
-            if (nextToken && isSameUnit(nextToken) && FuzzyMatcher.isMatch(spokenWord, nextToken.norm, AppState.settings.tolerance)) {
-              this.markWord(AppState.currentIndex, 'word-mistake', '(سقطت من التسميع)');
-              AppState.mistakeCount++;
-              AppState.consecutiveMistakes++;
-              AppState.unmatchedAtCurrentCount = 0;
-              this.recordMistake(expectedToken.text, '(سقطت من التسميع)', AppState.currentIndex);
+            // B: exactly one word skipped: the spoken word matches the word after the expected one (strict match)
+            if (nextToken && isSameUnit(nextToken) && this.strictMatch(spokenWord, nextToken.norm) &&
+                (nextToken.norm.length >= 3 || (nextSpokenWord && nextNextToken && FuzzyMatcher.isMatch(nextSpokenWord, nextNextToken.norm, AppState.settings.tolerance)))) {
+              this.flagMistake(AppState.currentIndex, '(سقطت من التسميع)');
               AppState.currentIndex++;
-
-              // Continued reciting text: clear off-track timer and continue smoothly
-              this.clearMistakeStop();
-              this.clearOffTrackTimer();
-              this.updateCurrentWordCursor();
-              if (AppState.settings.autoScroll) this.scrollToCurrentWord();
-              this.onProgressUpdate();
-              continue; // Next iteration will match spokenWord with nextToken as green!
-            }
-
-            // Lookahead C: User made 2 consecutive errors, but the 3rd spoken word matches nextNextToken within SAME hadith!
-            const nextNextToken = (AppState.currentIndex + 2 < AppState.tokens.length) ? AppState.tokens[AppState.currentIndex + 2] : null;
-            const thirdSpokenWord = (matchedCount + 2 < words.length) ? words[matchedCount + 2] : null;
-            if (thirdSpokenWord && nextNextToken && isSameUnit(nextToken) && isSameUnit(nextNextToken) && FuzzyMatcher.isMatch(thirdSpokenWord, nextNextToken.norm, AppState.settings.tolerance)) {
-              this.markWord(AppState.currentIndex, 'word-mistake', spokenWord);
-              this.markWord(AppState.currentIndex + 1, 'word-mistake', nextSpokenWord || '');
-              AppState.mistakeCount += 2;
-              AppState.consecutiveMistakes += 2;
-              AppState.unmatchedAtCurrentCount = 0;
-              this.recordMistake(expectedToken.text, spokenWord, AppState.currentIndex);
-              this.recordMistake(nextToken.text, nextSpokenWord || '', AppState.currentIndex + 1);
-              AppState.currentIndex += 2;
-              matchedCount += 2;
-
-              // Continued reciting text: clear off-track timer and continue smoothly
               this.clearMistakeStop();
               this.clearOffTrackTimer();
               this.updateCurrentWordCursor();
@@ -7172,6 +7153,31 @@
         processSpokenText(spokenPhrase) {
           // Backward-compatibility wrapper
           this.processSpeechResult(9999, spokenPhrase, true);
+        },
+
+        // Strict comparison used only when deciding to skip a word (avoids false jumps on short/common words)
+        strictMatch(sp, tk) {
+          if (!sp || !tk) return false;
+          if (sp === tk) return true;
+          const x = TextNormalizer.stripPrefix(sp), y = TextNormalizer.stripPrefix(tk);
+          if (x === y && x.length >= 3) return true;
+          return sp.length >= 4 && tk.length >= 4 && FuzzyMatcher.similarity(sp, tk) >= 0.8;
+        },
+
+        // A word we could not confirm: silent by default (shown as correct), flagged only if "show mistakes" is on
+        flagMistake(index, heard) {
+          const tok = AppState.tokens[index];
+          if (!tok) return;
+          if (AppState.settings.showMistakes) {
+            this.markWord(index, 'word-mistake', heard);
+            AppState.mistakeCount++;
+            AppState.consecutiveMistakes++;
+            this.recordMistake(tok.text, heard, index);
+          } else {
+            this.markWord(index, 'word-correct');
+            AppState.correctCount++;
+          }
+          AppState.unmatchedAtCurrentCount = 0;
         },
 
         markWord(index, stateClass, heardWord = '') {
@@ -9223,6 +9229,15 @@
             updateFormulaButtonUI();
           }
 
+          const chkShowMistakes = document.getElementById('chkShowMistakes');
+          if (chkShowMistakes) {
+            chkShowMistakes.checked = !!AppState.settings.showMistakes;
+            chkShowMistakes.onchange = (e) => {
+              AppState.settings.showMistakes = e.target.checked;
+              StorageManager.save();
+            };
+          }
+
           const chkSkipNarrationFormulas = document.getElementById('chkSkipNarrationFormulas');
           if (chkSkipNarrationFormulas) {
             chkSkipNarrationFormulas.onchange = (e) => {
@@ -10656,6 +10671,8 @@
           document.getElementById('chkIgnoreDiacritics').checked = AppState.settings.ignoreDiacritics;
           const chkForm = document.getElementById('chkSkipNarrationFormulas');
           if (chkForm) chkForm.checked = AppState.settings.skipNarrationFormulas !== false;
+          const chkShowMis = document.getElementById('chkShowMistakes');
+          if (chkShowMis) chkShowMis.checked = !!AppState.settings.showMistakes;
           document.getElementById('selectTolerance').value = AppState.settings.tolerance || 'medium';
           const elMaxMis = document.getElementById('selectMaxConsecutiveMistakes');
           if (elMaxMis) elMaxMis.value = AppState.settings.offTrackTimeoutSeconds || AppState.settings.maxConsecutiveMistakes || 30;
