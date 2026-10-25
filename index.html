@@ -4437,12 +4437,12 @@
       /* One chapter at a time */
       .pager-hidden { display: none !important; }
       html.pager-on .doc-hadith-unit { margin-bottom: 1rem; }
-      .pager-arrow { position: absolute; top: 50%; transform: translateY(-50%); z-index: 30; width: 46px; height: 46px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--bg-card); color: var(--gold-primary); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.18); opacity: .92; transition: transform .15s ease, opacity .15s ease, background .15s ease; padding: 0; min-height: 0; }
+      .pager-arrow { position: fixed; top: 50%; transform: translateY(-50%); z-index: 30; width: 46px; height: 46px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--bg-card); color: var(--gold-primary); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.18); opacity: .92; transition: transform .15s ease, opacity .15s ease, background .15s ease; padding: 0; min-height: 0; }
       .pager-arrow:hover:not(:disabled) { opacity: 1; transform: translateY(-50%) scale(1.08); background: var(--gold-bg); }
       .pager-arrow:disabled { opacity: .25; cursor: default; }
       .pager-next { left: 10px; }
       .pager-prev { right: 10px; }
-      @media (max-width: 700px) { .pager-arrow { display: none !important; } }
+      @media (max-width: 700px) { .pager-arrow { width: 38px; height: 38px; opacity: .8; } }
 
       /* Narration formulas that are skipped: clearly marked as "not recited" */
       html.formula-skip-on .recite-word.formula-word { opacity: .5; text-decoration: line-through; text-decoration-color: var(--gold-primary); text-decoration-thickness: 1.5px; cursor: default; }
@@ -6484,9 +6484,17 @@
         },
         syncArrows() {
           if (!this.arrows) return;
-          const on = this.active && this.total > 1;
+          const box = document.getElementById('docPaperContainer');
+          const visible = !!(box && box.offsetParent !== null);
+          const on = this.active && this.total > 1 && visible;
           this.arrows.next.style.display = on ? '' : 'none';
           this.arrows.prev.style.display = on ? '' : 'none';
+          if (on) {
+            const r = box.parentElement.getBoundingClientRect();
+            const gap = window.innerWidth <= 700 ? 4 : 12;
+            this.arrows.next.style.left = Math.max(gap, r.left + gap) + 'px';
+            this.arrows.prev.style.right = Math.max(gap, window.innerWidth - r.right + gap) + 'px';
+          }
           this.arrows.next.disabled = !on || this.current >= this.total;
           this.arrows.prev.disabled = !on || this.current <= 1;
         },
@@ -6501,7 +6509,7 @@
             b.type = 'button'; b.className = 'pager-arrow ' + cls;
             b.setAttribute('aria-label', label); b.title = label;
             b.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + pathD + '"/></svg>';
-            host.appendChild(b); return b;
+            document.body.appendChild(b); return b;
           };
           // Arabic (RTL): the next chapter lives on the left, the previous on the right
           const next = mk('pager-next', 'الباب التالي', 'M15 5l-7 7 7 7');
@@ -6509,6 +6517,8 @@
           next.onclick = () => this.go(1);
           prev.onclick = () => this.go(-1);
           this.arrows = { next, prev };
+          setInterval(() => this.syncArrows(), 400);
+          window.addEventListener('resize', () => this.syncArrows());
           // Swipe (phones): finger moves left = next chapter
           box.addEventListener('touchstart', e => { const t = e.changedTouches[0]; this.touchX = t.clientX; this.touchY = t.clientY; }, { passive: true });
           box.addEventListener('touchend', e => {
