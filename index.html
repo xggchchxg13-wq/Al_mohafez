@@ -4446,6 +4446,10 @@
 
       /* Narration formulas that are skipped: clearly marked as "not recited" */
       html.formula-skip-on .recite-word.formula-word { opacity: .5; text-decoration: line-through; text-decoration-color: var(--gold-primary); text-decoration-thickness: 1.5px; cursor: default; }
+
+      /* Minhaj: each ayah / hadith on its own line, clearly separated */
+      .doc-para-block { display: block; text-align: right; margin: 0; padding: 0.55rem 0; }
+      .doc-para-block + .doc-para-block { border-top: 1px dashed var(--border-subtle); }
     </style>
   </head>
   <body class="">
@@ -9216,8 +9220,18 @@
             const unitBody = document.createElement('div');
             unitBody.className = isPoetry ? 'doc-hadith-body doc-poem-body' : 'doc-hadith-body';
 
-            page.paragraphs.forEach((paraText, paraIdx) => {
-              if (paraIdx > 0 && !isPoetry) {
+            // Minhaj: every ayah and every hadith starts and ends on its own line
+            const useBlocks = (bookKey === 'minhaj') && !isPoetry;
+            const paragraphList = useBlocks
+              ? page.paragraphs.flatMap(p => {
+                  if (p.indexOf('﴾') === -1 || /^\s*[\d٠-٩]+\s*[\.\-\)]/.test(p)) return [p];
+                  return p.replace(/(\[[^\]]+\][،\.؛]*)\s+(?=\S)/g, '$1\u0001').split('\u0001').filter(s => s.trim());
+                })
+              : page.paragraphs;
+            paragraphList.forEach((paraText, paraIdx) => {
+              const paraBox = useBlocks ? document.createElement('div') : unitBody;
+              if (useBlocks) { paraBox.className = 'doc-para-block'; unitBody.appendChild(paraBox); }
+              if (paraIdx > 0 && !isPoetry && !useBlocks) {
                 const spacer = document.createElement('span');
                 spacer.className = 'para-flow-spacer';
                 spacer.innerHTML = ' &nbsp;&nbsp; ';
@@ -9235,8 +9249,8 @@
                 headingSpan.className = 'recite-ref-tag section-heading-tag';
                 headingSpan.textContent = headingRaw;
                 headingSpan.title = 'عنوان/رقم (للتوثيق فقط ولا يلزم نطقه في التسميع - يبدأ التسميع مباشرة من المتن)';
-                unitBody.appendChild(headingSpan);
-                unitBody.appendChild(document.createTextNode(' '));
+                paraBox.appendChild(headingSpan);
+                paraBox.appendChild(document.createTextNode(' '));
                 paraText = paraText.slice(headingMatch[0].length);
               }
 
@@ -9270,8 +9284,8 @@
                                   isParenNumber ? 'رقم الحديث في التخريج (للتوثيق فقط ولا يلزم نطقه)' :
                                   isPunctuationOnly ? 'فاصل بين شطري البيت' :
                                   'رقم مرجعي';
-                  unitBody.appendChild(tagSpan);
-                  unitBody.appendChild(document.createTextNode(' '));
+                  paraBox.appendChild(tagSpan);
+                  paraBox.appendChild(document.createTextNode(' '));
                 } else {
                   // Recitable word token
                   const norm = TextNormalizer.normalize(raw, docData.isArabic);
@@ -9299,8 +9313,8 @@
                     MemorizationTracker.jumpToWord(parseInt(span.dataset.index, 10));
                   };
 
-                  unitBody.appendChild(span);
-                  unitBody.appendChild(document.createTextNode(' '));
+                  paraBox.appendChild(span);
+                  paraBox.appendChild(document.createTextNode(' '));
                   globalIdx++;
                 }
               }
